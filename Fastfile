@@ -1,0 +1,190 @@
+# This file contains the fastlane.tools configuration
+# You can find the documentation at https://docs.fastlane.tools
+#
+# For a list of all available actions, check out
+#
+#     https://docs.fastlane.tools/actions
+#
+# For a list of all available plugins, check out
+#
+#     https://docs.fastlane.tools/plugins/available-plugins
+#
+
+# Uncomment the line if you want fastlane to automatically update itself
+# update_fastlane
+
+platform :ios do
+  desc 'Generates new certs/profiles and adds them to Match repo'
+  lane :certs do
+    match(type: 'appstore')
+  end
+
+  desc 'Deploys a build to internal testflight or pushes internal to open beta or production'
+  lane :deploy do
+    if ENV['DESIRED_VERSION'] && !ENV['DESIRED_VERSION'].empty?
+      version = ENV['DESIRED_VERSION']
+    else
+      latest_testflight_build_number
+      internal_version = lane_context[SharedValues::LATEST_TESTFLIGHT_VERSION]
+      UI.message("Latest internal version: #{internal_version}")
+      begin
+        app_store_build_number
+        live_version = lane_context[SharedValues::LATEST_VERSION]
+        UI.message("Latest live version: #{live_version}")
+      rescue => ex
+        UI.message("Failed to get live version from App Store: #{ex}")
+        live_version = nil
+      end
+      if internal_version && (internal_version != live_version)
+        UI.message("Internal version is different from live version, using internal version")
+        version = internal_version
+      elsif live_version
+        UI.message("Incrementing live version")
+        increment_version_number(version_number: live_version)
+        version = increment_version_number
+      else
+        UI.user_error!("Failed getting version numbers!")
+      end
+    end
+    UI.message("Deploying version: #{version}")
+
+    if not ENV["TRACK"] or ENV['TRACK'] == "internal"
+      setup_ci
+      match(type: "appstore", readonly: true)
+      increment_build_number(build_number: Time.now.to_i.to_s)
+      increment_version_number(version_number: version)
+      gym(export_method: "app-store")
+      testflight(skip_waiting_for_build_processing: false)
+    elsif ENV["TRACK"] == "beta"
+      testflight(
+        distribute_only: true,
+        distribute_external: true,
+        groups: "Beta Testers",
+        app_platform: "ios"
+      )
+    elsif ENV["TRACK"] == "production"
+      deliver(
+        app_version: internal_version,
+        skip_binary_upload: true,
+        overwrite_screenshots: false,
+        submit_for_review: true,
+        automatic_release: true,
+        submission_information: { "add_id_info_uses_idfa": false },
+        reject_if_possible: true,
+        run_precheck_before_submit: false,
+        platform: "ios",
+        force: true
+      )
+    end
+  end
+end
+
+platform :android do
+  desc "Deploy an Android app"
+  lane :deploy do
+    # Set the Android version offset if it's not already set
+    build_code_offset = ENV['ANDROID_BUILD_CODE_OFFSET'] || 0
+
+    if ENV['DESIRED_VERSION']
+      version = ENV['DESIRED_VERSION']
+    else
+      # set to nil if array from function call is empty else take the first item
+      internal_version = google_play_track_release_names(track: 'internal')[0] or nil
+      UI.message("Latest internal version: #{internal_version}")
+      live_version = google_play_track_release_names()[0] or nil
+      UI.message("Latest live version: #{live_version}")
+
+      if internal_version && internal_version != live_version
+        UI.message("Internal version is different from live version, using internal version")
+        version = internal_version
+      elsif live_version
+        UI.message("Incrementing live version")
+        # find semver version and increment patch
+        # if version is 4 we want to increment to 4.0.1
+        # if version is 4.1 we want to increment to 4.1.1
+        # so the last two sections should be optional when finding the regex
+        semver_regex = /(\d+(?:\.\d+){0,2})/
+        versions = live_version.scan(semver_regex).flatten
+        if not versions
+          UI.user_error!("Failed getting version numbers!")
+        end
+        # if we find two matches, we want to take the 
+        # first one closest to a real semver
+        # it could be 100 (1.0.0) or 1.0.0 (100)
+        semver_version = versions.find { |v| v.split(".").length == 3 }
+        if not semver_version
+          major_minor_version = versions.find { |v| v.split(".").length == 2 }
+          if major_minor_version 
+            semver_version =  major_minor_version + '.0'
+          end
+        end
+        if not semver_version
+          semver_version = versions[0] + '.0.0'
+        end
+
+        # now increment the patch
+        components = semver_version.split('.').map(&:to_i)
+        components[-1] += 1
+        version = components.join('.')
+      else
+        UI.user_error!("Failed getting version numbers!")
+      end
+    end
+    UI.message("Deploying version: #{version}")
+
+    date_in_hrs = Time.now.to_i / 3600
+    mobile_version_offset = 1000000
+    track = ENV['TRACK'] || 'internal'
+    version_codes = google_play_track_version_codes(track: track)
+    # subtract the offset from the version codes
+    codes_as_timestamps = version_codes.map { |code| code.to_i - build_code_offset.to_i - mobile_version_offset }
+    earliest = Time.new(2020, 1, 1).to_i / 3600
+    # remove the times that are betweeen the earliest and now (the apollos codes)
+    non_apollos_mobile_codes = codes_as_timestamps.select { |timestamp| timestamp < earliest or timestamp > date_in_hrs }
+    # add the offset back to the version codes
+    codes_to_keep = non_apollos_mobile_codes.map { |timestamp| timestamp + build_code_offset.to_i + mobile_version_offset }
+    UI.message("Keeping version codes: #{codes_to_keep}")
+
+    if track == "internal"
+      version_code = date_in_hrs + mobile_version_offset + build_code_offset.to_i
+      build_gradle_file = '../android/app/build.gradle'
+      gradle_file = File.read(build_gradle_file)
+      gradle_file = gradle_file.gsub(/versionCode \d+\s*$/, "versionCode #{version_code}")
+      gradle_file = gradle_file.gsub(/versionName ".*"\s*$/, "versionName \"#{version}\"")
+      File.open(build_gradle_file, "w") { |file| file.puts gradle_file }
+
+      # Build the Android App
+      gradle(task: 'clean', project_dir: 'android')
+      gradle(task: 'bundle', build_type: 'Release', project_dir: 'android')
+
+      # Deploy to internal track
+      supply(
+        track: 'internal', 
+        skip_upload_screenshots: true, 
+        version_codes_to_retain: codes_to_keep,
+        aab: 'android/app/build/outputs/bundle/release/app-release.aab'
+      )
+    else
+      internal_version_codes = google_play_track_version_codes(track: "internal")
+      codes_as_timestamps = internal_version_codes.map { |code| code.to_i - build_code_offset.to_i - mobile_version_offset }
+      apollos_mobile_codes = codes_as_timestamps.select { |timestamp| timestamp > earliest and timestamp <= date_in_hrs }
+      codes_to_promote = apollos_mobile_codes.map { |timestamp| timestamp + build_code_offset.to_i + mobile_version_offset }
+      UI.message("Promoting version codes: #{codes_to_promote}")
+      # if there are no codes to promote, return an error
+      if codes_to_promote.length != 1
+        UI.user_error!("Error promoting versions!")
+      end
+      # Deploy to specified track by promoting from internal track
+      supply(
+        track: 'internal',
+        track_promote_to: track,
+        version_code: codes_to_promote[0],
+        skip_upload_aab: true,
+        skip_upload_screenshots: true,
+        skip_upload_metadata: true,
+        skip_upload_changelogs: true,
+        skip_upload_images: true,
+      )
+    end
+  end
+end

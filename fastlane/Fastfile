@@ -79,12 +79,20 @@ platform :ios do
   end
 end
 
+lane :build_code_offset do
+  church_build_code_offset = ENV['ANDROID_BUILD_CODE_OFFSET'] || 0
+  platform_name = lane_context[SharedValues::PLATFORM_NAME]
+  if platform_name == :android
+    return 1000000 + church_build_code_offset.to_i
+  elsif platform_name == :androidtv
+    return 2000000 + church_build_code_offset.to_i
+  end
+end
+
+
 platform :android do
   desc "Deploy an Android app"
   lane :deploy do
-    # Set the Android version offset if it's not already set
-    build_code_offset = ENV['ANDROID_BUILD_CODE_OFFSET'] || 0
-
     if ENV['DESIRED_VERSION']
       version = ENV['DESIRED_VERSION']
     else
@@ -132,21 +140,21 @@ platform :android do
     end
     UI.message("Deploying version: #{version}")
 
-    date_in_hrs = Time.now.to_i / 3600
-    mobile_version_offset = 1000000
-    track = ENV['TRACK'] || 'internal'
-    version_codes = google_play_track_version_codes(track: track)
-    # subtract the offset from the version codes
-    codes_as_timestamps = version_codes.map { |code| code.to_i - build_code_offset.to_i - mobile_version_offset }
     earliest = Time.new(2020, 1, 1).to_i / 3600
-    # remove the times that are betweeen the earliest and now (the apollos codes)
-    non_apollos_mobile_codes = codes_as_timestamps.select { |timestamp| timestamp < earliest or timestamp > date_in_hrs }
-    # add the offset back to the version codes
-    codes_to_keep = non_apollos_mobile_codes.map { |timestamp| timestamp + build_code_offset.to_i + mobile_version_offset }
-    UI.message("Keeping version codes: #{codes_to_keep}")
+    date_in_hrs = Time.now.to_i / 3600
+    track = ENV['TRACK'] || 'internal'
 
     if track == "internal"
-      version_code = date_in_hrs + mobile_version_offset + build_code_offset.to_i
+      version_codes = google_play_track_version_codes(track: track)
+      # subtract the offset from the version codes
+      codes_as_timestamps = version_codes.map { |code| code.to_i - build_code_offset }
+      # remove the times that are betweeen the earliest and now (the apollos codes)
+      non_apollos_mobile_codes = codes_as_timestamps.select { |timestamp| timestamp < earliest or timestamp > date_in_hrs }
+      # add the offset back to the version codes
+      codes_to_keep = non_apollos_mobile_codes.map { |timestamp| timestamp + build_code_offset }
+      UI.message("Keeping version codes: #{codes_to_keep}")
+
+      version_code = date_in_hrs + build_code_offset
       build_gradle_file = '../android/app/build.gradle'
       gradle_file = File.read(build_gradle_file)
       gradle_file = gradle_file.gsub(/versionCode \d+\s*$/, "versionCode #{version_code}")
@@ -166,9 +174,9 @@ platform :android do
       )
     else
       internal_version_codes = google_play_track_version_codes(track: "internal")
-      codes_as_timestamps = internal_version_codes.map { |code| code.to_i - build_code_offset.to_i - mobile_version_offset }
+      codes_as_timestamps = internal_version_codes.map { |code| code.to_i - build_code_offset }
       apollos_mobile_codes = codes_as_timestamps.select { |timestamp| timestamp > earliest and timestamp <= date_in_hrs }
-      codes_to_promote = apollos_mobile_codes.map { |timestamp| timestamp + build_code_offset.to_i + mobile_version_offset }
+      codes_to_promote = apollos_mobile_codes.map { |timestamp| timestamp + build_code_offset }
       UI.message("Promoting version codes: #{codes_to_promote}")
       # if there are no codes to promote, return an error
       if codes_to_promote.length != 1

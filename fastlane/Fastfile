@@ -82,21 +82,20 @@ end
 
 
 platform :android do
-  desc "Gets build code offset for church and platform type"
-  lane :build_code_offset do
+  desc "Deploy an Android app"
+  lane :deploy do
+    # get build code offset
     church_build_code_offset = ENV['ANDROID_BUILD_CODE_OFFSET'] || 0
     apollos_platform = ENV['APOLLOS_PLATFORM']
     if apollos_platform == "mobile"
-      return 1000000 + church_build_code_offset.to_i
+      build_code_offset = 1000000 + church_build_code_offset.to_i
     elsif apostolos_platform == "tv"
-      return 2000000 + church_build_code_offset.to_i
+      build_code_offset = 2000000 + church_build_code_offset.to_i
     else
       UI.user_error!("Invalid apollos platform: #{apollos_platform}")
     end
-  end
+    UI.message("Build code offset: #{build_code_offset}")
 
-  desc "Deploy an Android app"
-  lane :deploy do
     if ENV['DESIRED_VERSION']
       version = ENV['DESIRED_VERSION']
     else

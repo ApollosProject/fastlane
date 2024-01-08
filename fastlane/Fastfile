@@ -79,18 +79,22 @@ platform :ios do
   end
 end
 
-lane :build_code_offset do
-  church_build_code_offset = ENV['ANDROID_BUILD_CODE_OFFSET'] || 0
-  platform_name = lane_context[SharedValues::PLATFORM_NAME]
-  if platform_name == :android
-    return 1000000 + church_build_code_offset.to_i
-  elsif platform_name == :androidtv
-    return 2000000 + church_build_code_offset.to_i
-  end
-end
 
 
 platform :android do
+  desc "Gets build code offset for church and platform type"
+  lane :build_code_offset do
+    church_build_code_offset = ENV['ANDROID_BUILD_CODE_OFFSET'] || 0
+    apollos_platform = ENV['APOLLOS_PLATFORM']
+    if apollos_platform == "mobile"
+      return 1000000 + church_build_code_offset.to_i
+    elsif apostolos_platform == "tv"
+      return 2000000 + church_build_code_offset.to_i
+    else
+      UI.user_error!("Invalid apollos platform: #{apollos_platform}")
+    end
+  end
+
   desc "Deploy an Android app"
   lane :deploy do
     if ENV['DESIRED_VERSION']

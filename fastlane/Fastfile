@@ -89,7 +89,7 @@ platform :android do
     apollos_platform = ENV['APOLLOS_PLATFORM']
     if apollos_platform == "mobile"
       build_code_offset = 1000000 + church_build_code_offset.to_i
-    elsif apostolos_platform == "tv"
+    elsif apollos_platform == "tv"
       build_code_offset = 2000000 + church_build_code_offset.to_i
     else
       UI.user_error!("Invalid apollos platform: #{apollos_platform}")

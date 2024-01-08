@@ -199,3 +199,20 @@ platform :android do
     end
   end
 end
+
+platform :amazon do
+  desc "Deploy an Amazon FireTV app"
+  lane :deploy do
+    build_gradle_file = '../android/app/build.gradle'
+    gradle_file = File.read(build_gradle_file)
+    gradle_file = gradle_file.gsub(/versionCode \d+\s*$/, "versionCode #{Time.now.to_i.to_s}")
+    File.open(build_gradle_file, "w") { |file| file.puts gradle_file }
+    gradle(task: 'clean', project_dir: 'android')
+    gradle(task: 'assemble', build_type: 'Release', project_dir: 'android')
+    amazon_app_submission(
+      changelogs_path: "fastlane/changelogs",
+      upload_changelogs: true,
+      submit_for_review: true
+    )
+  end
+end
